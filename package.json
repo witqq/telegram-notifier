@@ -1,0 +1,25 @@
+{
+  "name": "telegram-notifier",
+  "version": "1.0.0",
+  "description": "CLI utility for sending notifications to Telegram",
+  "type": "module",
+  "bin": {
+    "notify-telegram": "./notify-telegram.js"
+  },
+  "scripts": {
+    "link": "npm link",
+    "unlink": "npm unlink -g"
+  },
+  "keywords": [
+    "telegram",
+    "notifications",
+    "cli",
+    "bot"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0",
+    "dotenv": "^16.4.7"
+  }
+}
