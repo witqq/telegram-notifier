@@ -33,7 +33,7 @@ TELEGRAM_OWNER_CHAT_ID=your_private_chat_id
 TELEGRAM_CHANNEL_CHAT_ID=@your_channel_username
 ```
 
-`TELEGRAM_CHAT_ID` remains a compatibility fallback for `owner` only. A `channel` command never falls back to it. The bot token and both destination identifiers must stay out of Git, reports, screenshots, and public artifacts.
+`TELEGRAM_CHAT_ID` remains a compatibility fallback for `owner` only. A `channel` command never falls back to it. Keep the bot token, owner destination, private channel IDs, and raw `.env` values out of Git, reports, screenshots, and public artifacts. An intentionally public channel username or link may appear in separately prepared public material.
 
 ## Usage
 
@@ -67,15 +67,16 @@ notify-telegram --bot-identity
 
 ## Options
 
-Run `notify-telegram --help` for the complete current command surface. The key options are:
+Run `notify-telegram --help` for a concise usage summary. The supported options are:
 
-- `--target owner|channel` chooses one explicit destination;
+- `-t, --target owner|channel` chooses one explicit destination;
 - `--preview` or `--dry-run` prepares and displays the operation without creating a Telegram client;
-- `--markdown` enables formatting for content that fits one Telegram message;
-- `--edit`, `--file`, `--photo`, `--video`, `--voice`, and `--audio` select the supported operation;
+- `-m, --markdown` enables formatting for content that fits one Telegram message;
+- `-e, --edit`, `-f, --file`, `-p, --photo`, `-V, --video`, `-v, --voice`, and `-a, --audio` select the supported operation;
 - `--pin` pins a known message in the explicitly selected destination;
 - `--bot-identity` is an exclusive command that returns the configured bot's public username;
 - `--` ends option parsing, allowing text that starts with a hyphen.
+- `-h, --help` prints the concise usage summary.
 
 ## How it works
 
