@@ -1,6 +1,6 @@
 {
   "name": "telegram-notifier",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "CLI utility for sending notifications to Telegram",
   "type": "module",
   "bin": {

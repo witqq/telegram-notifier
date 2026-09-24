@@ -78,13 +78,15 @@ Run `notify-telegram --help` for a concise usage summary. The supported options 
 - `--` ends option parsing, allowing text that starts with a hyphen.
 - `-h, --help` prints the concise usage summary.
 
+A video is sent with its width, height, duration and a JPEG preview, so Telegram shows the real frame and length before the file is downloaded. The notifier measures the file with `ffprobe`, cuts the preview with `ffmpeg` (at most 320 px on the longer side, taken at the third second or the middle of a shorter clip) and deletes the preview after sending. Without `ffprobe` or `ffmpeg` on `PATH` the video is still sent, but Telegram then shows a square placeholder until the file is downloaded.
+
 ## How it works
 
 - `owner` resolves `TELEGRAM_OWNER_CHAT_ID`, with legacy `TELEGRAM_CHAT_ID` as an owner-only fallback. `channel` resolves only `TELEGRAM_CHANNEL_CHAT_ID`.
 - Plain text is split only at whitespace boundaries without cutting Unicode characters, links, or other indivisible tokens. An oversized indivisible token is rejected. Formatted text is measured after Telegram Markdown entities are parsed and must fit one message; formatted captions use the same rule and must fit the caption limit.
 - Preview validates the destination and local content but creates no Telegram client. It shows text parts, edit/pin message IDs, or the media filename and caption.
 - Each live command performs only the requested Bot API operation. It does not keep delivery state or retry automatically. If the result is uncertain, inspect Telegram before deciding whether to repeat it.
-- Successful sends, edits and pins print `message_id=<number>`. Failures print a fixed safe class and guidance without forwarding the raw Telegram or library error.
+- Successful sends, edits and pins print `message_id=<number>`. Failures print a fixed safe class and guidance without forwarding the raw Telegram or library error. An unknown-outcome failure (`delivery_failed`) also names its cause as symbolic codes only, for example `Причина: EFATAL, ECONNRESET.` or `HTTP 502`; library messages are never printed because they can contain the bot token.
 - The global `notify-telegram` command is provided through `npm link`.
 
 ## Development checks

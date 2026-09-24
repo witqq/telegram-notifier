@@ -1,4 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import TelegramBot from 'node-telegram-bot-api';
 
@@ -329,7 +331,61 @@ export async function editMessage(
   });
 }
 
-export async function executeOperation(prepared, client) {
+// Telegram draws a square placeholder with "00:00" for a video sent without
+// width, height, duration and a thumbnail, until the client downloads the file.
+// These helpers measure the file with ffprobe and cut a JPEG preview with ffmpeg.
+// Both tools are optional: without them the video is sent as before.
+export const THUMBNAIL_MAX_SIDE = 320;
+
+function runTool(command, args) {
+  return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+}
+
+export const defaultMediaTools = {
+  probeVideo(filePath, run = runTool) {
+    const report = JSON.parse(run('ffprobe', [
+      '-v', 'error', '-select_streams', 'v:0',
+      '-show_entries', 'stream=width,height:stream_side_data=rotation:format=duration',
+      '-of', 'json', filePath
+    ]));
+    const stream = report.streams?.[0] || {};
+    let width = Number(stream.width);
+    let height = Number(stream.height);
+    const rotation = Math.abs(Number(stream.side_data_list?.find(item => 'rotation' in item)?.rotation) || 0);
+    if (rotation === 90 || rotation === 270) [width, height] = [height, width];
+    const duration = Number(report.format?.duration);
+    if (!(width > 0 && height > 0)) return null;
+    return { width, height, duration: duration > 0 ? Math.round(duration) : undefined };
+  },
+  makeThumbnail(filePath, directory, duration, run = runTool) {
+    const target = path.join(directory, 'thumbnail.jpg');
+    // Past the usual fade-in, so the preview is not an empty first frame.
+    const seek = duration ? Math.min(3, duration / 2) : 0;
+    run('ffmpeg', [
+      '-v', 'error', '-y', '-ss', String(seek), '-i', filePath, '-frames:v', '1',
+      '-vf', `scale=${THUMBNAIL_MAX_SIDE}:${THUMBNAIL_MAX_SIDE}:force_original_aspect_ratio=decrease`,
+      '-q:v', '5', target
+    ]);
+    return fs.statSync(target).isFile() ? target : null;
+  }
+};
+
+export function prepareVideoOptions(filePath, tools = defaultMediaTools) {
+  let meta = null;
+  try { meta = tools.probeVideo(filePath); } catch { return { options: {}, cleanup() {} }; }
+  if (!meta) return { options: {}, cleanup() {} };
+  const options = { width: meta.width, height: meta.height };
+  if (meta.duration) options.duration = meta.duration;
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-notifier-thumb-'));
+  const cleanup = () => fs.rmSync(directory, { recursive: true, force: true });
+  try {
+    const thumbnail = tools.makeThumbnail(filePath, directory, meta.duration);
+    if (thumbnail) options.thumb = thumbnail;
+  } catch { /* a missing preview must not block delivery */ }
+  return { options, cleanup };
+}
+
+export async function executeOperation(prepared, client, mediaTools = defaultMediaTools) {
   const { bot, chatId } = client;
   if (prepared.kind === 'text') {
     const ids = [];
@@ -347,12 +403,19 @@ export async function executeOperation(prepared, client) {
     return [prepared.messageId];
   }
   const method = `send${prepared.mediaType[0].toUpperCase()}${prepared.mediaType.slice(1)}`;
+  const video = prepared.mediaType === 'video'
+    ? prepareVideoOptions(prepared.filePath, mediaTools)
+    : { options: {}, cleanup() {} };
   const options = {
     caption: prepared.caption,
     ...buildTextOptions(prepared.markdown),
-    ...(prepared.mediaType === 'video' ? { supports_streaming: true } : {})
+    ...(prepared.mediaType === 'video' ? { supports_streaming: true, ...video.options } : {})
   };
-  return [getMessageId(await bot[method](chatId, prepared.filePath, options))];
+  try {
+    return [getMessageId(await bot[method](chatId, prepared.filePath, options))];
+  } finally {
+    video.cleanup();
+  }
 }
 
 function safeFailure(error) {
@@ -368,7 +431,25 @@ function safeFailure(error) {
   if (status === 429) {
     return new NotifierError('rate_limited', 'Telegram ограничил частоту. Проверьте канал перед ручным повтором.');
   }
-  return new NotifierError('delivery_failed', 'Результат операции неизвестен. Проверьте Telegram перед повтором.');
+  return new NotifierError(
+    'delivery_failed',
+    `Результат операции неизвестен. Проверьте Telegram перед повтором.${failureDetail(error, status)}`
+  );
+}
+
+// Only symbolic codes and a numeric status are reported: error messages and response bodies of
+// node-telegram-bot-api may contain the bot token (in request URLs) or the chat id.
+const SAFE_CODE = /^[A-Z][A-Z0-9_]{1,40}$/u;
+
+export function failureDetail(error, status) {
+  const codes = [];
+  for (const candidate of [error?.code, error?.cause?.code, error?.errno, error?.cause?.errno]) {
+    if (typeof candidate === 'string' && SAFE_CODE.test(candidate) && !codes.includes(candidate)) {
+      codes.push(candidate);
+    }
+  }
+  if (Number.isInteger(status)) codes.push(`HTTP ${status}`);
+  return codes.length ? ` Причина: ${codes.join(', ')}.` : '';
 }
 
 export function showHelp(output = console.log) {
@@ -412,7 +493,7 @@ export async function runCli(args, dependencies = {}) {
       return 0;
     }
     const client = createClient(parsed.target, env, botFactory);
-    const messageIds = await executeOperation(prepared, client);
+    const messageIds = await executeOperation(prepared, client, dependencies.mediaTools || defaultMediaTools);
     for (const messageId of messageIds) output(`message_id=${messageId}`);
     return 0;
   } catch (error) {

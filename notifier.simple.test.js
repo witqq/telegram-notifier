@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,7 +9,9 @@ import {
   MAX_CAPTION_LENGTH,
   MAX_TEXT_LENGTH,
   NotifierError,
+  THUMBNAIL_MAX_SIDE,
   buildTextOptions,
+  defaultMediaTools,
   editMessage,
   normalizeMessageText,
   parseArgs,
@@ -352,4 +355,91 @@ test('CLI rejects conflicting operations and supports text beginning with a dash
     error => error instanceof NotifierError && error.code === 'operation_conflict'
   );
   assert.deepEqual(parseArgs(['--', '-not-an-option']).positional, ['-not-an-option']);
+});
+
+test('video is sent with measured size, duration and a thumbnail that is removed afterwards', async t => {
+  const filePath = tempFile(t, '.mp4');
+  const calls = [];
+  let thumbnailPath = null;
+  const mediaTools = {
+    probeVideo: () => ({ width: 1920, height: 1080, duration: 117 }),
+    makeThumbnail(_file, directory) {
+      thumbnailPath = path.join(directory, 'thumbnail.jpg');
+      fs.writeFileSync(thumbnailPath, 'jpeg');
+      return thumbnailPath;
+    }
+  };
+  const code = await runCli(['--video', filePath, 'Подпись'], {
+    env: { TELEGRAM_BOT_TOKEN: 'token', TELEGRAM_OWNER_CHAT_ID: 'owner' },
+    botFactory: () => ({ async sendVideo(...args) {
+      calls.push(args);
+      assert.equal(fs.existsSync(args[2].thumb), true);
+      return { message_id: 9 };
+    } }),
+    mediaTools, output() {}, errorOutput: value => assert.fail(value)
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(calls[0][2], {
+    caption: 'Подпись', supports_streaming: true,
+    width: 1920, height: 1080, duration: 117, thumb: thumbnailPath
+  });
+  assert.equal(fs.existsSync(path.dirname(thumbnailPath)), false);
+});
+
+test('video delivery does not depend on media tools being available', async t => {
+  const filePath = tempFile(t, '.mp4');
+  const calls = [];
+  const code = await runCli(['--video', filePath], {
+    env: { TELEGRAM_BOT_TOKEN: 'token', TELEGRAM_OWNER_CHAT_ID: 'owner' },
+    botFactory: () => ({ async sendVideo(...args) { calls.push(args); return { message_id: 3 }; } }),
+    mediaTools: { probeVideo() { throw new Error('ffprobe missing'); }, makeThumbnail() { assert.fail(); } },
+    output() {}, errorOutput: value => assert.fail(value)
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(calls[0][2], { caption: '', supports_streaming: true });
+});
+
+let hasFfmpeg = true;
+try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); execFileSync('ffprobe', ['-version'], { stdio: 'ignore' }); }
+catch { hasFfmpeg = false; }
+
+test('real ffprobe and ffmpeg measure a landscape video and cut a small preview', { skip: !hasFfmpeg }, t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-notifier-real-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const video = path.join(directory, 'clip.mp4');
+  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=640x360:rate=25:duration=2',
+    '-pix_fmt', 'yuv420p', video]);
+  const meta = defaultMediaTools.probeVideo(video);
+  assert.deepEqual(meta, { width: 640, height: 360, duration: 2 });
+  const thumbnail = defaultMediaTools.makeThumbnail(video, directory, meta.duration);
+  const size = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height',
+    '-of', 'json', thumbnail], { encoding: 'utf8' })).streams[0];
+  assert.deepEqual(size, { width: THUMBNAIL_MAX_SIDE, height: 180 });
+  assert.ok(fs.statSync(thumbnail).size < 200 * 1024);
+});
+
+test('delivery_failed reports a symbolic network cause without leaking the token', async () => {
+  const errors = [];
+  const code = await runCli(['диагностика'], {
+    env: { TELEGRAM_BOT_TOKEN: 'TOKEN-SENTINEL', TELEGRAM_CHAT_ID: 'CHAT-SENTINEL' },
+    botFactory: () => ({ async sendMessage() {
+      const error = new Error('EFATAL: Error: read ECONNRESET https://api.telegram.org/botTOKEN-SENTINEL/sendMessage');
+      error.code = 'EFATAL';
+      error.cause = { code: 'ECONNRESET' };
+      throw error;
+    } }),
+    output: value => assert.fail(value), errorOutput: value => errors.push(value)
+  });
+  assert.equal(code, 1);
+  const text = errors.join('\n');
+  assert.match(text, /\[delivery_failed\].*Причина: EFATAL, ECONNRESET\./u);
+  assert.equal(text.includes('TOKEN-SENTINEL'), false);
+  assert.equal(text.includes('CHAT-SENTINEL'), false);
+});
+
+test('failureDetail keeps only symbolic codes and numeric status', async () => {
+  const { failureDetail } = await import('./notifier.js');
+  assert.equal(failureDetail({ code: 'ETIMEDOUT' }, 500), ' Причина: ETIMEDOUT, HTTP 500.');
+  assert.equal(failureDetail({ code: 'bot123:secret-token' }, undefined), '');
+  assert.equal(failureDetail({}, undefined), '');
 });
