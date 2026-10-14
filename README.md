@@ -35,6 +35,15 @@ TELEGRAM_CHANNEL_CHAT_ID=@your_channel_username
 
 `TELEGRAM_CHAT_ID` remains a compatibility fallback for `owner` only. A `channel` command never falls back to it. Keep the bot token, owner destination, private channel IDs, and raw `.env` values out of Git, reports, screenshots, and public artifacts. An intentionally public channel username or link may appear in separately prepared public material.
 
+Environment variables supplied by the caller take precedence over the same keys
+in `.env`; values absent from the environment use the file defaults. To select
+a different bot and private destination for one invocation, pass
+`TELEGRAM_BOT_TOKEN` and `TELEGRAM_OWNER_CHAT_ID` in that process's environment.
+For example, an application can set them in the `env` option of its child
+process without changing the notifier's `.env` or later notifications.
+Use the canonical `TELEGRAM_OWNER_CHAT_ID` for this override:
+`TELEGRAM_CHAT_ID` is only a fallback and does not replace a configured owner ID.
+
 ## Usage
 
 ```bash

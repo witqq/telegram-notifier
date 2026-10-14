@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   MAX_CAPTION_LENGTH,
@@ -32,6 +33,66 @@ function tempFile(t, extension = '.bin') {
   fs.writeFileSync(filePath, 'proof');
   return filePath;
 }
+
+test('startup keeps caller bot and owner overrides while preserving file defaults', async t => {
+  const root = path.dirname(fileURLToPath(import.meta.url));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-notifier-env-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  fs.copyFileSync(path.join(root, 'notify-telegram.js'), path.join(directory, 'notify-telegram.js'));
+  fs.writeFileSync(path.join(directory, 'package.json'), '{"type":"module"}');
+  fs.symlinkSync(path.join(root, 'node_modules'), path.join(directory, 'node_modules'));
+  fs.writeFileSync(path.join(directory, '.env'), [
+    'TELEGRAM_BOT_TOKEN=file-token',
+    'TELEGRAM_OWNER_CHAT_ID=file-owner',
+    'TELEGRAM_CHAT_ID=file-legacy',
+    'TELEGRAM_CHANNEL_CHAT_ID=file-channel'
+  ].join('\n'));
+  // Exercise the real entrypoint and dotenv startup, then inspect a client
+  // built by the real resolver with a fake bot. No Telegram operation runs.
+  fs.writeFileSync(path.join(directory, 'notifier.js'), `
+    import assert from 'node:assert/strict';
+    import { createClient, resolveTarget } from ${JSON.stringify(pathToFileURL(path.join(root, 'notifier.js')).href)};
+    export async function runCli(args) {
+      assert.deepEqual(args, ['--fixture']);
+      const expected = JSON.parse(process.env.EXPECTED_NOTIFIER_CONFIG);
+      const client = createClient('owner', process.env, token => ({ token }));
+      assert.equal(client.bot.token, expected.token);
+      assert.equal(client.chatId, expected.owner);
+      assert.equal(resolveTarget('channel', process.env).chatId, expected.channel);
+      console.log('configuration verified');
+      return 0;
+    }
+  `);
+  const environment = Object.fromEntries(Object.entries(process.env)
+    .filter(([key]) => !key.startsWith('TELEGRAM_')));
+  const cases = [
+    {
+      name: 'ordinary notifications use file defaults', overrides: {},
+      expected: { token: 'file-token', owner: 'file-owner', channel: 'file-channel' }
+    },
+    {
+      name: 'caller selects a dedicated bot and owner',
+      overrides: { TELEGRAM_BOT_TOKEN: 'caller-token', TELEGRAM_OWNER_CHAT_ID: 'caller-owner' },
+      expected: { token: 'caller-token', owner: 'caller-owner', channel: 'file-channel' }
+    },
+    {
+      name: 'legacy chat remains a fallback and channel override is independent',
+      overrides: { TELEGRAM_CHAT_ID: 'caller-legacy', TELEGRAM_CHANNEL_CHAT_ID: 'caller-channel' },
+      expected: { token: 'file-token', owner: 'file-owner', channel: 'caller-channel' }
+    }
+  ];
+  for (const entry of cases) {
+    await t.test(entry.name, () => {
+      const output = execFileSync(process.execPath,
+        [path.join(directory, 'notify-telegram.js'), '--fixture'], {
+          encoding: 'utf8', timeout: 5000,
+          env: { ...environment, ...entry.overrides, EXPECTED_NOTIFIER_CONFIG: JSON.stringify(entry.expected) },
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+      assert.equal(output.trim(), 'configuration verified');
+    });
+  }
+});
 
 test('protected text helpers and edit parsing remain compatible', async () => {
   assert.equal(normalizeMessageText('one\\n\\ntwo'), 'one\n\ntwo');
