@@ -28,7 +28,7 @@ bot.on('message', (msg) => {
   console.log(`\n✅ Chat ID found: ${chatId}`);
   console.log(`   User: ${username}`);
   console.log(`\nAdd this to your .env file:`);
-  console.log(`TELEGRAM_CHAT_ID=${chatId}`);
+  console.log(`TELEGRAM_OWNER_CHAT_ID=${chatId}`);
 
   bot.sendMessage(chatId, '✅ Chat ID detected! Check your terminal.');
 
